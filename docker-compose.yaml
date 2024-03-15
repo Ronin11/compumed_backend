@@ -1,0 +1,92 @@
+version: '3.7'
+
+services:
+  server:
+    build:
+      context: ./api_server
+      dockerfile: Dockerfile
+    environment:
+      POSTGRES_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASS}@postgres:${POSTGRES_PORT}/${POSTGRES_DB_NAME}
+      POSTGRES_DEVICES_TABLE_NAME: ${POSTGRES_DEVICES_TABLE_NAME}
+      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_REALM_NAME: ${KEYCLOAK_REALM_NAME}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID}
+      KEYCLOAK_SECRET_ID: ${KEYCLOAK_SECRET_ID}
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KEYCLOAK_ADMIN_REALM_NAME: ${KEYCLOAK_ADMIN_REALM_NAME}
+      MQTT_URL: tcp://mqtt:1883
+
+    depends_on:
+      - postgres
+      - mqtt
+    links:
+      - postgres
+      - mqtt
+    ports:
+      - ${BACKEND_PORT}:8080
+
+  postgres:
+    image: postgres:14-alpine
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB_NAME}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASS}
+      POSTGRES_HOST_AUTH_METHOD: trust
+
+    ports:
+      - ${POSTGRES_PORT}:5432
+
+  flyway:
+    image: flyway/flyway
+    # postgres url schema: jdbc:postgresql://host:port/database
+    command: -url=jdbc:postgresql://postgres:${POSTGRES_PORT}/${POSTGRES_DB_NAME} -user=${POSTGRES_USER} -password=${POSTGRES_PASS} -connectRetries=10 migrate info
+    volumes:
+        - ./migrations:/flyway/sql
+    links:
+        - postgres
+    depends_on:
+        - postgres
+
+  keycloak:
+    image: keycloak/keycloak:${KEYCLOAK_VERSION}
+    volumes:
+      - ./keycloak_imports:/opt/keycloak/data/import
+    command:
+      - start-dev 
+      - --import-realm
+    restart: always
+    links:
+      - postgres
+    environment:
+      KEYCLOAK_IMPORT: /opt/keycloak/keycloak/imports/realm-export.json -Dkeycloak.profile.feature.upload_scripts=enabled 
+      DB_VENDOR: POSTGRES
+      DB_ADDR: postgres:${POSTGRES_PORT}
+      DB_DATABASE: ${POSTGRES_DB_NAME}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASS}
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+
+    ports:
+      - ${KEYCLOAK_PORT}:8080
+    depends_on:
+      - postgres
+
+  mqtt:
+    image: eclipse-mosquitto
+    hostname: mosquitto
+    container_name: mosquitto
+    restart: unless-stopped
+    ports:
+      - ${MOSQUITTO_MQTT_PORT}:1883
+      - ${MOSQUITTO_WEBSOCKET_PORT}:9001
+    volumes:
+      - ./mqtt:/etc/mosquitto
+      - ./mqtt/mosquitto.conf:/mosquitto/config/mosquitto.conf
+
+volumes:
+  postgres_data:
+      driver: local
